@@ -1,0 +1,9 @@
+spring:
+  h2:
+    console:
+      enabled: false
+  datasource:
+    url: 'jdbc:h2:file:./cod-db'
+  jpa:
+    hibernate:
+      ddl-auto: validate

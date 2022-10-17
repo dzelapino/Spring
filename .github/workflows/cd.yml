@@ -1,0 +1,68 @@
+name: Continuous deployment
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download tarball
+      uses: robinraju/release-downloader@v1.4
+      with:
+        tarBall: true
+        tag: ${{github.event.release.tag_name}}
+    - name: Move the tarball to the /tmp directory
+      run: |
+        mv ./${{github.event.repository.name}}-${{github.event.release.tag_name}}.tar.gz /tmp
+    - name: Extract the tarball
+      run: |
+        tar -xvf /tmp/${{github.event.repository.name}}-${{github.event.release.tag_name}}.tar.gz -C /tmp/
+    - name: Move the files to the current directory
+      run: |
+        shopt -s dotglob
+        mv /tmp/${{github.event.repository.owner.login}}-${{github.event.repository.name}}-$GITHUB_SHA/* ./
+        shopt -u dotglob
+    - uses: actions/setup-java@v3
+      with:
+        distribution: 'corretto'
+        java-version: '11'
+    - name: Build
+      run: |
+        ./mvnw clean package spring-boot:repackage
+    - name: Save build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: target
+        path: ./target
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{secrets.DOCKER_HUB_USERNAME}}
+        password: ${{secrets.DOCKER_HUB_ACCESS_TOKEN}}
+    - name: Publish to Docker Hub with given tag
+      run: |
+        docker build -f ./.github/docker/Dockerfile -t ${{secrets.DOCKER_IMAGE_NAME}}:${{github.event.release.tag_name}} .
+        docker push ${{secrets.DOCKER_IMAGE_NAME}}:${{github.event.release.tag_name}}
+    - name: Publish to Docker Hub as latest
+      if: ${{github.event.release.target_commitish == 'prod'}}
+      run: |
+        docker tag ${{secrets.DOCKER_IMAGE_NAME}}:${{github.event.release.tag_name}} ${{secrets.DOCKER_IMAGE_NAME}}:latest
+        docker push ${{secrets.DOCKER_IMAGE_NAME}}:latest
+  deploy_publicly:
+    needs:
+    - publish
+    name: Deploy publicly
+    if: ${{github.event.release.target_commitish == 'prod'}}
+    runs-on: ubuntu-latest
+    steps:
+    - name: SSH to the hosting server
+      uses: appleboy/ssh-action@master
+      with:
+        key: ${{secrets.DEPLOY_SSH_PRIVATE_KEY}}
+        host: ${{secrets.DEPLOY_SSH_HOST}}
+        username: ${{secrets.DEPLOY_SSH_USERNAME}}
+        script: |
+          ~/scripts/deploy/http-api-server.sh
